@@ -84,6 +84,15 @@ app.use('/api/audit',         require('./routes/audit'));
 // Student self-service portal
 app.use('/api/portal',      require('./routes/portal'));
 
+// Library
+app.use('/api/library',   require('./routes/library'));
+
+// Hostel
+app.use('/api/hostel',    require('./routes/hostel'));
+
+// Transport
+app.use('/api/transport', require('./routes/transport'));
+
 // ── 404 ────────────────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found` });

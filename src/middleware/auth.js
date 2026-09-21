@@ -43,8 +43,16 @@ async function authenticate(req, res, next) {
 //  Attaches req.membership, req.effectivePermissions, req.instituteId
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadMembership(req, res, next) {
-  // Super admins skip membership checks
-  if (req.isSuperAdmin) return next();
+  // Super admins skip membership checks but still need instituteId for data scoping
+  if (req.isSuperAdmin) {
+    const instituteId =
+      req.headers['x-institute-id'] ||
+      req.params.instituteId ||
+      req.query.institute_id ||
+      req.body?.institute_id;
+    if (instituteId) req.instituteId = instituteId;
+    return next();
+  }
 
   // Institute ID from: header > route param > query
   const instituteId =
