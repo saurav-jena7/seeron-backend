@@ -25,10 +25,63 @@ router.get('/',               ...auth, requirePermission('employee.view'),   asy
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 
-router.get('/teachers/list',  ...auth, requirePermission('employee.view'),   async (req, res) => {
+router.get('/teachers/list', ...auth, requirePermission('employee.view'), async (req, res) => {
   try {
-    const rows = await Employee.find({ institute: req.instituteId, isTeacher: true, deletedAt: null }).sort({ name: 1 });
-    return res.json({ success: true, data: rows });
+    const iid = req.instituteId;
+
+    // Source 1: Employees explicitly marked as teachers
+    const employeeTeachers = await Employee.find({ institute: iid, isTeacher: true, deletedAt: null })
+      .sort({ name: 1 });
+
+    // Source 2: Members with TEACHER role who don't have an Employee record yet
+    const InstituteMembership = require('../db/models/InstituteMembership');
+    const Role = require('../db/models/Role');
+    const { User } = require('../db/models/User');
+
+    const teacherRole = await Role.findOne({ name: 'TEACHER', institute: null });
+    if (teacherRole) {
+      const teacherMemberships = await InstituteMembership.find({
+        institute: iid,
+        roles: teacherRole._id,
+        isActive: true,
+        deletedAt: null,
+      }).populate('user', 'name email phone');
+
+      // Find memberships whose user does NOT already have an Employee record
+      const existingUserIds = new Set(employeeTeachers.map(e => String(e.user)));
+
+      for (const m of teacherMemberships) {
+        if (!m.user) continue;
+        if (existingUserIds.has(String(m.user._id))) continue; // already in employees list
+
+        // Create a virtual teacher entry — use membership createdAt as joining date fallback
+        employeeTeachers.push({
+          id:              m.user._id,
+          _id:             m.user._id,
+          name:            m.user.name,
+          email:           m.user.email,
+          phone:           m.user.phone,
+          employeeCode:    null,
+          employee_code:   null,
+          designation:     'Teacher',
+          department:      null,
+          // Use membership creation date as the joining date
+          // Both camelCase and snake_case so frontend can pick either
+          joiningDate:     m.createdAt ? m.createdAt.toISOString().split('T')[0] : null,
+          joining_date:    m.createdAt ? m.createdAt.toISOString().split('T')[0] : null,
+          created_at:      m.createdAt ? m.createdAt.toISOString() : null,
+          isTeacher:       true,
+          is_teacher:      true,
+          institute:       iid,
+          _fromMembership: true,
+        });
+      }
+    }
+
+    // Sort all by name
+    employeeTeachers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    return res.json({ success: true, data: employeeTeachers });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 

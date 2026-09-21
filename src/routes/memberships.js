@@ -77,6 +77,25 @@ router.post('/', ...auth, requirePermission('membership.create'),
         { upsert: true, new: true }
       ).populate('user', USER_FIELDS).populate('roles', 'name displayName');
 
+      // Auto-create Employee record if user has TEACHER role and doesn't have one yet
+      const Employee = require('../db/models/Employee');
+      const hasTeacherRole = roles.some(r => r.name === 'TEACHER');
+      if (hasTeacherRole) {
+        const existingEmp = await Employee.findOne({ user: user._id, institute: req.instituteId });
+        if (!existingEmp) {
+          await Employee.create({
+            institute:  req.instituteId,
+            user:       user._id,
+            name:       user.name,
+            email:      user.email,
+            phone:      user.phone || null,
+            isTeacher:  true,
+            isActive:   true,
+            designation: 'Teacher',
+          });
+        }
+      }
+
       logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'CREATE', resource: 'memberships', resourceId: membership._id, newData: { name, email }, req });
       return res.status(201).json({ success: true, data: membership });
     } catch (e) {
