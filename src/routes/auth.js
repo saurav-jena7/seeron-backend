@@ -44,7 +44,7 @@ async function buildAuthContext(user) {
     return {
       membershipId: m._id,
       institute: m.institute,
-      roles: (m.roles || []).map((r) => ({ id: r._id, name: r.name, displayName: r.displayName })),
+      roles: (m.roles || []).map((r) => ({ id: r._id, name: r.name, displayName: r.displayName || r.display_name || r.name })),
       permissions: [...permSet],
     };
   });
