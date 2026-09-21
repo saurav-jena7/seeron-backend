@@ -32,6 +32,20 @@ function getInstId(req) {
     req.body?.institute_id;
 }
 
+// GET /api/library/stats — real library stats
+router.get('/stats', ...auth, async (req, res) => {
+  try {
+    const iid = getInstId(req);
+    if (!iid) return res.json({ success: true, data: { totalBooks: 0, totalCopies: 0, availableCopies: 0, issuedCopies: 0 } });
+    const books = await Book.find({ institute: iid, deletedAt: null });
+    const totalBooks      = books.length;
+    const totalCopies     = books.reduce((s, b) => s + (b.total_copies     || 0), 0);
+    const availableCopies = books.reduce((s, b) => s + (b.available_copies || 0), 0);
+    const issuedCopies    = totalCopies - availableCopies;
+    return res.json({ success: true, data: { totalBooks, totalCopies, availableCopies, issuedCopies } });
+  } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
 // GET /api/library/books
 router.get('/books', ...auth, requirePermission('library.book.view'), async (req, res) => {
   try {
