@@ -10,7 +10,7 @@ const { logAudit }  = require('../middleware/audit');
 const auth = [authenticate, loadMembership];
 
 // Populate fields returned to the client — include plainPassword for admin visibility
-const USER_FIELDS = 'name email phone isActive plainPassword';
+const USER_FIELDS = 'name email phone isActive plainPassword isSuperAdmin';
 
 // ── GET /api/memberships ──────────────────────────────────────────────────────
 router.get('/', ...auth, requirePermission('membership.view'), async (req, res) => {
@@ -25,13 +25,13 @@ router.get('/', ...auth, requirePermission('membership.view'), async (req, res) 
       .skip((+page - 1) * +limit)
       .limit(+limit);
 
-    let filtered = memberships;
+    let filtered = memberships.filter(m => !m.user?.isSuperAdmin); // hide super admin
     if (search) {
       const re = new RegExp(search, 'i');
-      filtered = memberships.filter(m => re.test(m.user?.name) || re.test(m.user?.email));
+      filtered = filtered.filter(m => re.test(m.user?.name) || re.test(m.user?.email));
     }
 
-    const total = await InstituteMembership.countDocuments(filter);
+    const total = filtered.length;
     return res.json({ success: true, data: filtered, meta: { total, page: +page, limit: +limit } });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });

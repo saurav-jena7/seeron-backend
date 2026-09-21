@@ -13,8 +13,10 @@ const auth = [authenticate, loadMembership];
 // GET /api/roles — list roles available to this institute (system + institute-specific)
 router.get('/', ...auth, requirePermission('role.view'), async (req, res) => {
   try {
+    // SUPER_ADMIN is a platform-level flag (User.isSuperAdmin), never assignable as a role
     const roles = await Role.find({
       $or: [{ institute: null }, { institute: req.instituteId }],
+      name: { $nin: ['SUPER_ADMIN'] },
       deletedAt: null,
     }).populate('permissions', 'name resource action module description').sort({ name: 1 });
     return res.json({ success: true, data: roles });
