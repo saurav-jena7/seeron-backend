@@ -1,13 +1,16 @@
-const router    = require('express').Router();
-const bcrypt    = require('bcryptjs');
-const { User }  = require('../db/models/User');
+const router  = require('express').Router();
+const bcrypt  = require('bcryptjs');
+const { User } = require('../db/models/User');
 const InstituteMembership = require('../db/models/InstituteMembership');
-const Role      = require('../db/models/Role');
+const Role    = require('../db/models/Role');
 const { authenticate, loadMembership, requirePermission } = require('../middleware/auth');
-const { validate }   = require('../middleware/validate');
-const { logAudit }   = require('../middleware/audit');
+const { validate }  = require('../middleware/validate');
+const { logAudit }  = require('../middleware/audit');
 
 const auth = [authenticate, loadMembership];
+
+// Populate fields returned to the client — include plainPassword for admin visibility
+const USER_FIELDS = 'name email phone isActive plainPassword';
 
 // ── GET /api/memberships ──────────────────────────────────────────────────────
 router.get('/', ...auth, requirePermission('membership.view'), async (req, res) => {
@@ -16,7 +19,7 @@ router.get('/', ...auth, requirePermission('membership.view'), async (req, res) 
     const filter = { institute: req.instituteId, deletedAt: null };
 
     const memberships = await InstituteMembership.find(filter)
-      .populate('user', 'name email phone isActive avatarUrl')
+      .populate('user', USER_FIELDS)
       .populate('roles', 'name displayName')
       .sort({ createdAt: -1 })
       .skip((+page - 1) * +limit)
@@ -40,6 +43,7 @@ router.post('/', ...auth, requirePermission('membership.create'),
     try {
       const { name, email, password, roleIds, phone } = req.body;
 
+      // Validate roles
       const roles = await Role.find({
         _id: { $in: roleIds },
         $or: [{ institute: null }, { institute: req.instituteId }],
@@ -49,19 +53,20 @@ router.post('/', ...auth, requirePermission('membership.create'),
         return res.status(400).json({ success: false, message: 'One or more invalid roles' });
       }
 
+      // Create or find user — store plainPassword for admin to view/share
       let user = await User.findOne({ email: email.toLowerCase().trim() });
       if (!user) {
         user = await User.create({
           name,
-          email: email.toLowerCase().trim(),
-          passwordHash: bcrypt.hashSync(password, 12),
-          phone: phone || null,
+          email:         email.toLowerCase().trim(),
+          passwordHash:  bcrypt.hashSync(password, 12),
+          plainPassword: password,   // stored so admin can view/share credentials
+          phone:         phone || null,
         });
       }
 
-      const existing = await InstituteMembership.findOne({
-        user: user._id, institute: req.instituteId,
-      });
+      // Check existing membership
+      const existing = await InstituteMembership.findOne({ user: user._id, institute: req.instituteId });
       if (existing && !existing.deletedAt) {
         return res.status(409).json({ success: false, message: 'User is already a member of this institute' });
       }
@@ -70,13 +75,9 @@ router.post('/', ...auth, requirePermission('membership.create'),
         { user: user._id, institute: req.instituteId },
         { $set: { roles: roleIds, isActive: true, deletedAt: null } },
         { upsert: true, new: true }
-      ).populate('user', 'name email').populate('roles', 'name displayName');
+      ).populate('user', USER_FIELDS).populate('roles', 'name displayName');
 
-      logAudit({
-        userId: req.user._id, instituteId: req.instituteId,
-        action: 'CREATE', resource: 'memberships',
-        resourceId: membership._id, newData: { name, email, roles: roleIds }, req,
-      });
+      logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'CREATE', resource: 'memberships', resourceId: membership._id, newData: { name, email }, req });
       return res.status(201).json({ success: true, data: membership });
     } catch (e) {
       if (e.code === 11000) return res.status(409).json({ success: false, message: 'Email already registered' });
@@ -85,34 +86,51 @@ router.post('/', ...auth, requirePermission('membership.create'),
   }
 );
 
-// ── PUT /api/memberships/:id — update roles + optionally name/password ────────
+// ── PUT /api/memberships/:id — update roles / status / name / password ────────
 router.put('/:id', ...auth, requirePermission('membership.update'), async (req, res) => {
   try {
     const { roleIds, extraPermissions, deniedPermissions, isActive, newPassword, userName } = req.body;
 
-    const membership = await InstituteMembership.findOne({
-      _id: req.params.id, institute: req.instituteId,
-    });
+    // Find by ID — no institute filter to avoid 404/500 for valid cross-institute edge cases
+    const membership = await InstituteMembership.findById(req.params.id);
     if (!membership) return res.status(404).json({ success: false, message: 'Membership not found' });
 
-    // Update roles
-    if (roleIds !== undefined) {
+    // Verify ownership
+    if (!req.isSuperAdmin && String(membership.institute) !== String(req.instituteId)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    // Build $set object — only include fields that are actually changing
+    const updates = {};
+
+    // ── Roles ─────────────────────────────────────────────────────────────────
+    if (roleIds !== undefined && roleIds !== null) {
+      if (!Array.isArray(roleIds) || roleIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'At least one role is required' });
+      }
       const roles = await Role.find({
         _id: { $in: roleIds },
-        $or: [{ institute: null }, { institute: req.instituteId }],
+        $or: [{ institute: null }, { institute: membership.institute }],
         deletedAt: null,
       });
       if (roles.length !== roleIds.length) {
-        return res.status(400).json({ success: false, message: 'Invalid roles' });
+        return res.status(400).json({ success: false, message: 'One or more invalid roles' });
       }
-      membership.roles = roleIds;
+      updates.roles = roleIds;
     }
-    if (extraPermissions !== undefined) membership.extraPermissions = extraPermissions;
-    if (deniedPermissions !== undefined) membership.deniedPermissions = deniedPermissions;
-    if (isActive         !== undefined) membership.isActive         = isActive;
-    await membership.save();
 
-    // Optionally update user name / password
+    // ── Active status ──────────────────────────────────────────────────────────
+    if (isActive !== undefined) updates.isActive = Boolean(isActive);
+    if (extraPermissions !== undefined) updates.extraPermissions = extraPermissions;
+    if (deniedPermissions !== undefined) updates.deniedPermissions = deniedPermissions;
+
+    // Use findByIdAndUpdate with $set — bypasses Mongoose required-field validation
+    // since we are only updating specific fields, not the whole document
+    if (Object.keys(updates).length > 0) {
+      await InstituteMembership.findByIdAndUpdate(req.params.id, { $set: updates }, { runValidators: false });
+    }
+
+    // ── User name / password ───────────────────────────────────────────────────
     if (userName || newPassword) {
       const userUpdate = {};
       if (userName && userName.trim()) userUpdate.name = userName.trim();
@@ -120,39 +138,36 @@ router.put('/:id', ...auth, requirePermission('membership.update'), async (req, 
         if (newPassword.length < 8) {
           return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
         }
-        userUpdate.passwordHash = bcrypt.hashSync(newPassword, 12);
+        userUpdate.passwordHash  = bcrypt.hashSync(newPassword, 12);
+        userUpdate.plainPassword = newPassword;
       }
-      await User.findByIdAndUpdate(membership.user, userUpdate);
+      await User.findByIdAndUpdate(membership.user, { $set: userUpdate }, { runValidators: false });
     }
 
-    logAudit({
-      userId: req.user._id, instituteId: req.instituteId,
-      action: 'UPDATE', resource: 'memberships',
-      resourceId: membership._id, req,
-    });
+    logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'UPDATE', resource: 'memberships', resourceId: membership._id, req });
 
     const updated = await InstituteMembership.findById(membership._id)
-      .populate('user', 'name email phone')
+      .populate('user', USER_FIELDS)
       .populate('roles', 'name displayName');
     return res.json({ success: true, data: updated });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 
-// ── DELETE /api/memberships/:id — soft remove user from institute ─────────────
+// ── DELETE /api/memberships/:id — soft remove ─────────────────────────────────
 router.delete('/:id', ...auth, requirePermission('membership.delete'), async (req, res) => {
   try {
-    const membership = await InstituteMembership.findOne({
-      _id: req.params.id, institute: req.instituteId,
-    });
+    const membership = await InstituteMembership.findById(req.params.id);
     if (!membership) return res.status(404).json({ success: false, message: 'Membership not found' });
-    membership.deletedAt = new Date();
-    membership.isActive  = false;
-    await membership.save();
-    logAudit({
-      userId: req.user._id, instituteId: req.instituteId,
-      action: 'DELETE', resource: 'memberships',
-      resourceId: membership._id, req,
-    });
+    if (!req.isSuperAdmin && String(membership.institute) !== String(req.instituteId)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    // Use $set to bypass required-field validation
+    await InstituteMembership.findByIdAndUpdate(
+      req.params.id,
+      { $set: { deletedAt: new Date(), isActive: false } },
+      { runValidators: false }
+    );
+    logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'DELETE', resource: 'memberships', resourceId: membership._id, req });
     return res.json({ success: true, message: 'User removed from institute' });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
@@ -160,14 +175,11 @@ router.delete('/:id', ...auth, requirePermission('membership.delete'), async (re
 // ── GET /api/memberships/my ───────────────────────────────────────────────────
 router.get('/my', authenticate, loadMembership, async (req, res) => {
   try {
-    return res.json({
-      success: true,
-      data: {
-        membershipId:  req.membership._id,
-        roles:         req.membership.roles,
-        permissions:   [...(req.effectivePermissions || [])],
-      },
-    });
+    return res.json({ success: true, data: {
+      membershipId: req.membership._id,
+      roles:        req.membership.roles,
+      permissions:  [...(req.effectivePermissions || [])],
+    }});
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 

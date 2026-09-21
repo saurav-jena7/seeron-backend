@@ -7,14 +7,17 @@ const mongoose = require('mongoose');
  * It is set ONLY via the seed script / direct DB operation, never via API.
  */
 const userSchema = new mongoose.Schema({
-  name:         { type: String, required: true },
-  email:        { type: String, required: true, unique: true, lowercase: true, trim: true },
-  passwordHash: { type: String, required: true },
-  phone:        String,
-  avatarUrl:    String,
-  isSuperAdmin: { type: Boolean, default: false }, // platform-level bypass — never set via API
-  isActive:     { type: Boolean, default: true },
-  deletedAt:    { type: Date, default: null },
+  name:          { type: String, required: true },
+  email:         { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash:  { type: String, required: true },
+  // Plaintext password stored so admins can view/share credentials they created
+  // Only set when an admin creates the account — never exposed in auth responses
+  plainPassword: { type: String, default: null },
+  phone:         String,
+  avatarUrl:     String,
+  isSuperAdmin:  { type: Boolean, default: false },
+  isActive:      { type: Boolean, default: true },
+  deletedAt:     { type: Date, default: null },
 }, { timestamps: true });
 
 const refreshTokenSchema = new mongoose.Schema({
