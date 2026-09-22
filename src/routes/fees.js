@@ -53,11 +53,25 @@ router.post('/assignments',         ...auth, requirePermission('fee.create'),   
 // ── FEE PAYMENTS ───────────────────────────────────────────────────────────────
 router.get('/payments',             ...auth, requirePermission('fee.view'),     async (req, res) => {
   try {
-    const { page = 1, limit = 20, student_id, status, from_date, to_date } = req.query;
+    const { page = 1, limit = 20, student_id, status, from_date, to_date, search } = req.query;
     const filter = { deletedAt: null };
     if (student_id) filter.student = student_id;
     if (status)     filter.status  = status;
     if (from_date || to_date) { filter.paymentDate = {}; if (from_date) filter.paymentDate.$gte = from_date; if (to_date) filter.paymentDate.$lte = to_date; }
+
+    // Text search: find matching student IDs first, then filter payments
+    if (search) {
+      const Student = require('../db/models/Student');
+      const matchingStudents = await Student.find({
+        institute: req.instituteId,
+        $or: [
+          { name:        { $regex: search, $options: 'i' } },
+          { admissionNo: { $regex: search, $options: 'i' } },
+        ],
+      }).select('_id');
+      filter.student = { $in: matchingStudents.map(s => s._id) };
+    }
+
     const total = await FeePayment.countDocuments(filter);
     const rows  = await FeePayment.find(filter)
       .populate({ path: 'student', select: 'name admissionNo institute', match: { institute: req.instituteId } })
