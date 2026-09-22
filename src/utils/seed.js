@@ -155,12 +155,13 @@ const ROLE_DEFS = [
   },
   {
     name: 'ACCOUNTANT', displayName: 'Accountant', isSystem: true,
-    perms: ['student.view','fee.view','fee.create','fee.update','fee.collect','fee.refund',
+    perms: ['student.view','academic.view',
+      'fee.view','fee.create','fee.update','fee.collect','fee.refund',
       'finance.view','report.finance.view'],
   },
   {
     name: 'CFO', displayName: 'CFO', isSystem: true,
-    perms: ['finance.view','finance.reports.view',
+    perms: ['finance.view','finance.reports.view','academic.view',
       'fee.view','fee.create','fee.update','fee.collect','fee.refund',
       'report.finance.view','student.view','audit.view'],
   },

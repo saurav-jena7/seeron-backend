@@ -1,12 +1,10 @@
 /**
- * One-time migration: sync all role permissions in the live DB to match seed.js definitions.
- * Safely updates INSTITUTE_ADMIN, CFO, HR_MANAGER (and any other role) without touching user data.
+ * Sync all role permissions from seed definitions to live DB.
  * Run: node fix-role-permissions.js
  */
 require('dotenv').config();
 const mongoose = require('mongoose');
 
-// ── Inline the updated role definitions ──────────────────────────────────────
 const ROLE_UPDATES = [
   {
     name: 'INSTITUTE_ADMIN',
@@ -42,9 +40,17 @@ const ROLE_UPDATES = [
     ],
   },
   {
+    name: 'ACCOUNTANT',
+    perms: [
+      'student.view','academic.view',
+      'fee.view','fee.create','fee.update','fee.collect','fee.refund',
+      'finance.view','report.finance.view',
+    ],
+  },
+  {
     name: 'CFO',
     perms: [
-      'finance.view','finance.reports.view',
+      'finance.view','finance.reports.view','academic.view',
       'fee.view','fee.create','fee.update','fee.collect','fee.refund',
       'report.finance.view','student.view','audit.view',
     ],
@@ -55,58 +61,65 @@ const ROLE_UPDATES = [
       'employee.view','employee.create','employee.update','employee.delete',
       'membership.create','membership.view',
       'hr.view','hr.leave.view','hr.leave.approve','attendance.view',
-      'student.view','report.hr.view',
+      'student.view','academic.view','report.hr.view',
+    ],
+  },
+  {
+    name: 'TEACHER',
+    perms: [
+      'student.view','academic.view','attendance.view','attendance.create','attendance.update',
+      'assignment.view','assignment.create','assignment.update','assignment.delete',
+      'exam.view','exam.marks.create','exam.marks.update','notice.view',
+    ],
+  },
+  {
+    name: 'LIBRARIAN',
+    perms: [
+      'library.book.view','library.book.create','library.book.update','library.book.delete',
+      'library.issue.create','library.return.create','student.view','academic.view',
+    ],
+  },
+  {
+    name: 'HOSTEL_WARDEN',
+    perms: [
+      'hostel.view','hostel.room.create','hostel.room.update','hostel.allocation.create',
+      'student.view','academic.view',
+    ],
+  },
+  {
+    name: 'TRANSPORT_ADMIN',
+    perms: [
+      'transport.vehicle.view','transport.vehicle.create','transport.vehicle.update',
+      'transport.driver.create','transport.route.create','student.view','academic.view',
     ],
   },
 ];
 
 async function run() {
   await mongoose.connect(process.env.MONGODB_URI);
-  console.log('Connected to MongoDB\n');
+  console.log('Connected\n');
 
-  const permSchema  = new mongoose.Schema({ name: String }, { collection: 'permissions' });
-  const roleSchema  = new mongoose.Schema({
-    name: String, permissions: [mongoose.Schema.Types.ObjectId],
-    institute: { type: mongoose.Schema.Types.ObjectId, default: null },
-    deletedAt: { type: Date, default: null },
-  }, { collection: 'roles' });
+  const Permission = require('./src/db/models/Permission');
+  const Role       = require('./src/db/models/Role');
 
-  const Permission = mongoose.models.Permission || mongoose.model('Permission', permSchema);
-  const Role       = mongoose.models.Role       || mongoose.model('Role',       roleSchema);
-
-  // Build a name→_id map for all permissions in DB
   const allPerms = await Permission.find({});
   const permMap  = Object.fromEntries(allPerms.map(p => [p.name, p._id]));
 
-  let totalUpdated = 0;
-
   for (const def of ROLE_UPDATES) {
     const role = await Role.findOne({ name: def.name, institute: null, deletedAt: null });
-    if (!role) {
-      console.log(`  SKIP  ${def.name} — not found in DB (run seed.js first)`);
-      continue;
-    }
-
-    const newPermIds = def.perms
-      .map(p => permMap[p])
-      .filter(Boolean);
+    if (!role) { console.log(`SKIP ${def.name} — not found`); continue; }
 
     const missing = def.perms.filter(p => !permMap[p]);
-    if (missing.length > 0) {
-      console.log(`  WARN  ${def.name}: these permissions don't exist in DB yet — ${missing.join(', ')}`);
-    }
+    if (missing.length) console.log(`  WARN ${def.name} missing in DB: ${missing.join(', ')}`);
 
     const before = role.permissions.length;
-    role.permissions = newPermIds;
+    role.permissions = def.perms.map(p => permMap[p]).filter(Boolean);
     await role.save();
-    const after = role.permissions.length;
-
-    console.log(`  OK    ${def.name}: ${before} → ${after} permissions`);
-    totalUpdated++;
+    console.log(`  OK  ${def.name}: ${before} -> ${role.permissions.length} perms`);
   }
 
-  console.log(`\nDone — ${totalUpdated}/${ROLE_UPDATES.length} roles updated.`);
+  console.log('\nDone.');
   await mongoose.disconnect();
 }
 
-run().catch(err => { console.error(err.message); process.exit(1); });
+run().catch(e => { console.error(e.message); process.exit(1); });
