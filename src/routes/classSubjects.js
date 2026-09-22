@@ -34,9 +34,31 @@ async function assertClassOwnership(classId, instituteId) {
   return cls;
 }
 
-/** Verify a teacher is a marked teacher in the current institute */
+/** Verify a teacher is eligible: either an Employee with isTeacher=true, OR a user with TEACHER role membership */
 async function assertTeacherEligibility(teacherId, instituteId) {
-  return Employee.findOne({ _id: teacherId, institute: instituteId, isTeacher: true, deletedAt: null });
+  // Check 1: Employee record with isTeacher flag
+  const empTeacher = await Employee.findOne({ 
+    $or: [{ _id: teacherId }, { user: teacherId }],
+    institute: instituteId, isTeacher: true, deletedAt: null 
+  });
+  if (empTeacher) return empTeacher;
+
+  // Check 2: User with TEACHER role in their membership (added via Members panel)
+  const InstituteMembership = require('../db/models/InstituteMembership');
+  const Role = require('../db/models/Role');
+  const teacherRole = await Role.findOne({ name: 'TEACHER', institute: null });
+  if (!teacherRole) return null;
+
+  const membership = await InstituteMembership.findOne({
+    user: teacherId,
+    institute: instituteId,
+    roles: teacherRole._id,
+    isActive: true,
+    deletedAt: null,
+  });
+  if (membership) return membership; // eligible via role
+
+  return null;
 }
 
 // ── GET /api/class-subjects?class_id=xxx ─────────────────────────────────────
