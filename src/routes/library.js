@@ -114,4 +114,93 @@ router.delete('/books/:id', ...auth, requirePermission('library.book.delete'), a
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 
+// ── Book Issue / Return ────────────────────────────────────────────────────────
+
+const issueSchema = new mongoose.Schema({
+  institute:    { type: mongoose.Schema.Types.ObjectId, ref: 'Institute', required: true },
+  book:         { type: mongoose.Schema.Types.ObjectId, ref: 'Book', required: true },
+  member_type:  { type: String, enum: ['student', 'employee'], default: 'student' },
+  member_id:    { type: mongoose.Schema.Types.ObjectId, required: true },
+  member_name:  String,
+  issued_by:    { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  issue_date:   { type: String, required: true },
+  due_date:     { type: String, required: true },
+  return_date:  { type: String, default: null },
+  status:       { type: String, enum: ['issued', 'returned', 'overdue'], default: 'issued' },
+  deletedAt:    { type: Date, default: null },
+}, { timestamps: true });
+
+const Issue = mongoose.models.LibraryIssue || mongoose.model('LibraryIssue', issueSchema);
+
+// GET /api/library/issues
+router.get('/issues', ...auth, requirePermission('library.book.view'), async (req, res) => {
+  try {
+    const iid = getInstId(req);
+    const { status, book_id } = req.query;
+    const filter = { institute: iid, deletedAt: null };
+    if (status)  filter.status  = status;
+    if (book_id) filter.book    = book_id;
+    const issues = await Issue.find(filter)
+      .populate('book', 'title author isbn')
+      .sort({ createdAt: -1 })
+      .limit(100);
+    // Mark overdue
+    const today = new Date().toISOString().split('T')[0];
+    const result = issues.map(i => {
+      const obj = i.toJSON();
+      if (obj.status === 'issued' && obj.due_date < today) obj.status = 'overdue';
+      return obj;
+    });
+    return res.json({ success: true, data: result });
+  } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
+// POST /api/library/issues — issue a book
+router.post('/issues', ...auth, requirePermission('library.book.view'), async (req, res) => {
+  try {
+    const iid = getInstId(req);
+    const { book_id, member_type, member_id, member_name, issue_date, due_date } = req.body;
+    if (!book_id || !member_id || !issue_date || !due_date)
+      return res.status(400).json({ success: false, message: 'book_id, member_id, issue_date and due_date are required' });
+
+    const book = await Book.findOne({ _id: book_id, institute: iid, deletedAt: null });
+    if (!book) return res.status(404).json({ success: false, message: 'Book not found' });
+    if (book.available_copies < 1)
+      return res.status(400).json({ success: false, message: 'No copies available' });
+
+    const issue = await Issue.create({
+      institute: iid, book: book_id,
+      member_type: member_type || 'student', member_id, member_name: member_name || '',
+      issued_by: req.user._id, issue_date, due_date, status: 'issued',
+    });
+    await Book.findByIdAndUpdate(book_id, { $inc: { available_copies: -1 } }, { runValidators: false });
+
+    await issue.populate('book', 'title author isbn');
+    logAudit({ userId: req.user._id, instituteId: iid, action: 'CREATE', resource: 'library_issues', resourceId: issue._id, req });
+    return res.status(201).json({ success: true, data: issue });
+  } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
+// PUT /api/library/issues/:id/return — return a book
+router.put('/issues/:id/return', ...auth, requirePermission('library.book.view'), async (req, res) => {
+  try {
+    const iid = getInstId(req);
+    const issue = await Issue.findOne({ _id: req.params.id, institute: iid, deletedAt: null });
+    if (!issue) return res.status(404).json({ success: false, message: 'Issue record not found' });
+    if (issue.status === 'returned')
+      return res.status(400).json({ success: false, message: 'Book already returned' });
+
+    const return_date = req.body.return_date || new Date().toISOString().split('T')[0];
+    issue.status = 'returned';
+    issue.return_date = return_date;
+    await issue.save();
+
+    await Book.findByIdAndUpdate(issue.book, { $inc: { available_copies: 1 } }, { runValidators: false });
+
+    await issue.populate('book', 'title author isbn');
+    logAudit({ userId: req.user._id, instituteId: iid, action: 'UPDATE', resource: 'library_issues', resourceId: issue._id, req });
+    return res.json({ success: true, data: issue });
+  } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
+});
+
 module.exports = router;

@@ -136,13 +136,39 @@ router.put('/:id', ...auth, requirePermission('academic.update'), async (req, re
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    // Validate teacher eligibility
+    // Validate teacher eligibility and ensure they have an Employee record
     if (teacher_id) {
       const teacher = await assertTeacherEligibility(teacher_id, req.instituteId);
       if (!teacher) return res.status(400).json({ success: false, message: 'Teacher not found or not eligible' });
-    }
 
-    cs.teacher = teacher_id || null;
+      // Auto-create Employee record if teacher only has a membership (not an Employee record yet)
+      const Employee = require('../db/models/Employee');
+      const { User }  = require('../db/models/User');
+      let empRecord = await Employee.findOne({
+        $or: [{ _id: teacher_id }, { user: teacher_id }],
+        institute: req.instituteId, deletedAt: null,
+      });
+      if (!empRecord) {
+        // Teacher exists via membership only — create Employee so populate works
+        const user = await User.findById(teacher_id);
+        if (user) {
+          empRecord = await Employee.create({
+            institute:   req.instituteId,
+            user:        user._id,
+            name:        user.name,
+            email:       user.email,
+            phone:       user.phone || null,
+            isTeacher:   true,
+            isActive:    true,
+            designation: 'Teacher',
+          });
+        }
+      }
+      // Use the Employee _id for the teacher field (ClassSubject.teacher refs Employee)
+      cs.teacher = empRecord ? empRecord._id : null;
+    } else {
+      cs.teacher = null;
+    }
     await cs.save();
 
     await cs.populate([

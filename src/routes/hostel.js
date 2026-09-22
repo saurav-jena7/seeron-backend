@@ -11,7 +11,7 @@ const auth = [authenticate, loadMembership];
 
 // ── Helper: get instituteId for both regular users and super admin ─────────────
 function getInstId(req) {
-  return getInstId(req) ||
+  return req.instituteId ||
     req.headers['x-institute-id'] ||
     req.query.institute_id ||
     req.body?.institute_id;
