@@ -115,8 +115,17 @@ router.delete('/subjects/:id',...auth, requirePermission('academic.delete'), asy
 router.get('/timetable',      ...auth, requirePermission('academic.view'),   async (req, res) => {
   try {
     const { class_id, section_id } = req.query;
+    // Always scope to the current institute via class ownership
     const filter = { deletedAt: null };
-    if (class_id)   filter.class   = class_id;
+    if (class_id) {
+      filter.class = class_id;
+    } else {
+      // No class_id supplied — return all timetable entries for this institute
+      // by finding all classes that belong to this institute first
+      const { Class } = require('../db/models/Academic');
+      const classes = await Class.find({ institute: req.instituteId, deletedAt: null }).select('_id');
+      filter.class = { $in: classes.map(c => c._id) };
+    }
     if (section_id) filter.section = section_id;
     const rows = await Timetable.find(filter)
       .populate('subject','name').populate('teacher','name')
@@ -130,6 +139,28 @@ router.post('/timetable',     ...auth, requirePermission('academic.create'), val
     const { class_id, section_id, subject_id, teacher_id, day_of_week, start_time, end_time, room } = req.body;
     const entry = await Timetable.create({ class: class_id, section: section_id || null, subject: subject_id, teacher: teacher_id || null, dayOfWeek: day_of_week, startTime: start_time, endTime: end_time, room: room || null });
     return res.status(201).json({ success: true, data: entry });
+  } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
+});
+router.put('/timetable/:id',   ...auth, requirePermission('academic.update'), async (req, res) => {
+  try {
+    const { class_id, subject_id, teacher_id, section_id, day_of_week, start_time, end_time, room } = req.body;
+    const entry = await Timetable.findByIdAndUpdate(
+      req.params.id,
+      { $set: {
+        class:      class_id     || undefined,
+        subject:    subject_id   || undefined,
+        teacher:    teacher_id   || null,
+        section:    section_id   || null,
+        dayOfWeek:  day_of_week  !== undefined ? day_of_week  : undefined,
+        startTime:  start_time   || undefined,
+        endTime:    end_time     || undefined,
+        room:       room         ?? null,
+      }},
+      { new: true, runValidators: false }
+    ).populate('subject','name').populate('teacher','name').populate('class','name').populate('section','name');
+    if (!entry) return res.status(404).json({ success: false, message: 'Entry not found' });
+    logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'UPDATE', resource: 'timetable', resourceId: entry._id, req });
+    return res.json({ success: true, data: entry });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
 });
 router.delete('/timetable/:id',...auth,requirePermission('academic.delete'), async (req, res) => {
