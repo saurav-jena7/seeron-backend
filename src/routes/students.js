@@ -93,7 +93,39 @@ router.get('/:id', ...auth, requirePermission('student.view'), async (req, res) 
 // POST /api/students
 router.post('/', ...auth, requirePermission('student.create'), validate(['name']), async (req, res) => {
   try {
-    const student = await Student.create({ ...req.body, institute: req.instituteId });
+    const {
+      name, gender, dob, blood_group, phone, email, address,
+      admission_no, roll_no, class_id, section_id, academic_year_id,
+      admission_date, status, parent_name, parent_phone, parent_email,
+    } = req.body;
+
+    const student = await Student.create({
+      institute:    req.instituteId,
+      name,
+      gender:       gender       || null,
+      dob:          dob          || null,
+      bloodGroup:   blood_group  || null,
+      phone:        phone        || null,
+      email:        email        || null,
+      address:      address      || null,
+      admissionNo:  admission_no || null,
+      rollNo:       roll_no      || null,
+      class:        class_id     || null,
+      section:      section_id   || null,
+      academicYear: academic_year_id || null,
+      admissionDate: admission_date  || null,
+      status:       status       || 'active',
+      parentName:   parent_name  || null,
+      parentPhone:  parent_phone || null,
+      parentEmail:  parent_email || null,
+    });
+
+    await student.populate([
+      { path: 'class',        select: 'name' },
+      { path: 'section',      select: 'name' },
+      { path: 'academicYear', select: 'name' },
+    ]);
+
     logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'CREATE', resource: 'students', resourceId: student._id, newData: req.body, req });
     return res.status(201).json({ success: true, data: student });
   } catch (e) { return res.status(500).json({ success: false, message: e.message }); }
@@ -102,10 +134,41 @@ router.post('/', ...auth, requirePermission('student.create'), validate(['name']
 // PUT /api/students/:id
 router.put('/:id', ...auth, requirePermission('student.update'), async (req, res) => {
   try {
+    const {
+      name, gender, dob, blood_group, phone, email, address,
+      admission_no, roll_no, class_id, section_id, academic_year_id,
+      admission_date, status, parent_name, parent_phone, parent_email,
+    } = req.body;
+
+    const update = {};
+    if (name          !== undefined) update.name         = name;
+    if (gender        !== undefined) update.gender       = gender;
+    if (dob           !== undefined) update.dob          = dob;
+    if (blood_group   !== undefined) update.bloodGroup   = blood_group;
+    if (phone         !== undefined) update.phone        = phone;
+    if (email         !== undefined) update.email        = email;
+    if (address       !== undefined) update.address      = address;
+    if (admission_no  !== undefined) update.admissionNo  = admission_no;
+    if (roll_no       !== undefined) update.rollNo       = roll_no;
+    if (class_id      !== undefined) update.class        = class_id     || null;
+    if (section_id    !== undefined) update.section      = section_id   || null;
+    if (academic_year_id !== undefined) update.academicYear = academic_year_id || null;
+    if (admission_date !== undefined) update.admissionDate = admission_date;
+    if (status        !== undefined) update.status       = status;
+    if (parent_name   !== undefined) update.parentName   = parent_name;
+    if (parent_phone  !== undefined) update.parentPhone  = parent_phone;
+    if (parent_email  !== undefined) update.parentEmail  = parent_email;
+
     const student = await Student.findOneAndUpdate(
       { _id: req.params.id, institute: req.instituteId, deletedAt: null },
-      { $set: req.body }, { new: true, runValidators: true }
-    );
+      { $set: update },
+      { new: true, runValidators: false }
+    ).populate([
+      { path: 'class',        select: 'name' },
+      { path: 'section',      select: 'name' },
+      { path: 'academicYear', select: 'name' },
+    ]);
+
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
     logAudit({ userId: req.user._id, instituteId: req.instituteId, action: 'UPDATE', resource: 'students', resourceId: req.params.id, req });
     return res.json({ success: true, data: student });
