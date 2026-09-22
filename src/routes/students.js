@@ -1,5 +1,8 @@
 const router = require('express').Router();
+const bcrypt = require('bcryptjs');
 const Student = require('../db/models/Student');
+const { User } = require('../db/models/User');
+const Role = require('../db/models/Role');
 const { authenticate, loadMembership, requirePermission, hasPermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { logAudit } = require('../middleware/audit');

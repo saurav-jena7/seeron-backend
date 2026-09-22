@@ -154,7 +154,8 @@ router.put('/change-password', authenticate, validate(['currentPassword', 'newPa
     if (newPassword.length < 8) {
       return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
     }
-    user.passwordHash = bcrypt.hashSync(newPassword, 12);
+    user.passwordHash  = bcrypt.hashSync(newPassword, 12);
+    user.plainPassword = newPassword;   // keep plainPassword in sync for admin visibility
     await user.save();
     logAudit({ userId: user._id, action: 'UPDATE', resource: 'users', resourceId: user._id, req });
     return res.json({ success: true, message: 'Password changed successfully' });
